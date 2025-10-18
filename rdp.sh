@@ -13,7 +13,6 @@ fi
 
 echo
 echo "=== 📦 Update & Install Docker Compose ==="
-apt update -y
 apt install docker-compose -y
 
 systemctl enable docker
