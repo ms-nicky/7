@@ -1,0 +1,94 @@
+name: Safe Windows Remote (Self Host via ttyd)
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_password:
+        description: "Password untuk sesi remote (min 6 karakter)."
+        required: false
+        default: ""
+      runtime_minutes:
+        description: "Durasi hidup sesi (maks 240 menit, default 120)."
+        required: false
+        default: "120"
+
+jobs:
+  windows-remote:
+    runs-on: windows-latest
+    timeout-minutes: 250
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Setup environment
+        run: |
+          Write-Host "Menyiapkan sesi Windows..."
+          mkdir C:\RemoteSession -ErrorAction SilentlyContinue | Out-Null
+          cd C:\RemoteSession
+          echo "Sesi dimulai pada: $(Get-Date)" > session-info.txt
+
+      - name: Install ttyd (web terminal)
+        run: |
+          Write-Host "Mengunduh ttyd (web terminal)..."
+          $url = "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd_win64.exe"
+          Invoke-WebRequest -Uri $url -OutFile "C:\RemoteSession\ttyd.exe"
+          if (-not (Test-Path "C:\RemoteSession\ttyd.exe")) {
+            Write-Error "Gagal mengunduh ttyd."; exit 1
+          }
+
+      - name: Install ngrok
+        run: |
+          Write-Host "Mengunduh ngrok..."
+          $zipPath = "$env:TEMP\ngrok.zip"
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip" -OutFile $zipPath
+          Expand-Archive $zipPath -DestinationPath "C:\RemoteSession" -Force
+          Remove-Item $zipPath -Force
+          Write-Host "✅ Ngrok berhasil diinstal."
+
+      - name: Jalankan web terminal aman
+        run: |
+          $pass = "${{ inputs.session_password }}"
+          if (-not $pass -or $pass.Length -lt 6) {
+            $pass = [guid]::NewGuid().ToString().Substring(0,8)
+            Write-Host "🔑 Password acak dibuat: $pass"
+          } else {
+            Write-Host "🔑 Password sesi: $pass"
+          }
+
+          # Jalankan ttyd di background
+          Start-Process -NoNewWindow -FilePath "C:\RemoteSession\ttyd.exe" -ArgumentList "--port", "8080", "--credential", "$pass", "powershell.exe"
+          Start-Sleep -Seconds 3
+          Write-Host "✅ Web terminal berjalan di port 8080."
+
+          # Jalankan ngrok tunnel
+          $ngrokPath = "C:\RemoteSession\ngrok.exe"
+          Start-Process -FilePath $ngrokPath -ArgumentList "http", "8080" -WindowStyle Hidden
+          Write-Host "Menyiapkan tunnel ngrok..."
+          Start-Sleep -Seconds 10
+
+          # Ambil URL publik dari ngrok
+          $url = ""
+          try {
+            $url = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -UseBasicParsing).tunnels[0].public_url
+          } catch {
+            Write-Host "⚠️ Tidak bisa mengambil URL ngrok secara otomatis."
+          }
+
+          if ($url) {
+            Write-Host "🌐 Akses terminal kamu di:"
+            Write-Host "👉 $url"
+          } else {
+            Write-Host "Buka dashboard ngrok (http://127.0.0.1:4040) untuk melihat URL."
+          }
+
+      - name: Keep session alive
+        run: |
+          $mins = [int]"${{ inputs.runtime_minutes }}"
+          if ($mins -gt 240) { $mins = 240 }
+          $end = (Get-Date).AddMinutes($mins)
+          while ((Get-Date) -lt $end) {
+            Write-Host ("[KeepAlive] Sesi aktif sampai " + $end.ToString("HH:mm:ss"))
+            Start-Sleep -Seconds 60
+          }
+          Write-Host "🕒 Sesi selesai."
